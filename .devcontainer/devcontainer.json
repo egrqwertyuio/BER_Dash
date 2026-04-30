@@ -1,0 +1,25 @@
+{
+  "name": "EV4 Dashboard",
+
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+
+  "workspaceFolder": "/dashboard",
+
+ 
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      },
+
+      "extensions": [
+        "vscodevim.vim",
+        "platformio.platformio-ide",
+      ]
+    }
+  },
+
+
+}
