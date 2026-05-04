@@ -2,24 +2,40 @@
   "name": "EV4 Dashboard",
 
   "build": {
-    "dockerfile": "Dockerfile"
+    "dockerfile": "Dockerfile",
+    "context": "."
   },
 
-  "workspaceFolder": "/dashboard",
-
- 
   "customizations": {
     "vscode": {
       "settings": {
+        "terminal.integrated.profiles.linux": {
+          "bash": {
+            "path": "/bin/bash",
+            "icon": "terminal-bash"
+          }
+        },
         "terminal.integrated.defaultProfile.linux": "bash"
       },
 
       "extensions": [
         "vscodevim.vim",
         "platformio.platformio-ide",
+        "ms-vscode.cpptools",
+        "lharri73.dbc"
+
       ]
     }
   },
+
+
+
+
+  "runArgs": [
+    "--privileged" 
+  ]
+
+  // "postAttachCommand": "sudo service udev restart"
 
 
 }
