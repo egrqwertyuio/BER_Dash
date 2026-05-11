@@ -1,0 +1,5 @@
+led/.pio
+led/.vscode/.browse.c_cpp.db*
+led/.vscode/c_cpp_properties.json
+led/.vscode/launch.json
+led/.vscode/ipch
