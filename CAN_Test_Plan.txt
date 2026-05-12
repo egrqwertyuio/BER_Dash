@@ -1,0 +1,98 @@
+# BER CAN Bus Debug — Test Plan
+
+## Current status
+
+- Sender ESP32 + MCP2515: working, transmits frames over SPI
+- Receiver ESP32 + MCP2515: working, initialises in NORMAL mode
+- Screen (ST7789P3 via TFT_eSPI): working, deferred until CAN works
+- **Bus between the two MCP2515 modules: zero electrical signal getting through**
+
+Evidence: receiver shows `EFLG=0x0  TEC=0  REC=0` indefinitely — not corrupt frames, no frames at all. Sender's TX buffers fill up after 3 frames because nothing on the bus ACKs.
+
+## What we already know works
+
+- Both crystals are 8 MHz (verified visually)
+- Common ground between the two ESP32s is wired
+- Both J1 terminator jumpers are on
+- Both MCP2515 modules power up and respond to SPI
+- Sender's encoder reads correctly and triggers send calls
+
+## Goal
+
+Find the break in the physical CAN bus between the two MCP2515 modules.
+
+---
+
+## Step 1 — Re-seat the green screw terminals
+
+Most likely cause. These terminals frequently clamp plastic insulation instead of bare copper.
+
+1. Power both boards off
+2. On each MCP2515 module, unscrew the H and L terminals
+3. Pull each wire out, check the stripped end — should be 4–6 mm of clean bare copper, no insulation, no nicks
+4. Re-strip if needed
+5. Insert wire, tighten the screw firmly
+6. Tug each wire after tightening — should not pull out
+
+## Step 2 — Confirm you're using the GREEN screw terminals
+
+Not the male header pins on the side of the breakout. The actual CAN bus comes out of the green 2-screw terminal block on the edge of the PCB. The header pins labeled CANH/CANL on some modules are test points only.
+
+Visually trace each wire from the green terminal on board A to the green terminal on board B. No detours through the breadboard, no extra branches, no stubs.
+
+## Step 3 — Verify H and L are not swapped
+
+With both boards powered off, physically trace:
+- Green terminal "H" on board A → green terminal "H" on board B
+- Green terminal "L" on board A → green terminal "L" on board B
+
+The labels can be silkscreened on different sides on the two boards. Look at the actual orientation, not which screw is on the left.
+
+## Step 4 — Swap the wires
+
+If steps 1–3 look fine, swap the two wires between the boards. CANH on both ends to the wire that was on CANL, and vice versa. They still match end-to-end (H↔H, L↔L) but use different physical wires.
+
+If the bus suddenly works, one wire was broken internally.
+
+## Step 5 — Try short, fresh jumper wires
+
+If you've been using long jumper wires or wires that have been bent a lot, replace both with fresh short ones (6 inches max). Pre-made male-to-male Dupont jumpers work well plugged into the terminals if you don't have screw-friendly wire.
+
+## Step 6 — Test direction reversal
+
+Flash `CAN_Sender_Debug.ino` to the **receiver** hardware.
+Flash `CAN_Receiver_Debug.ino` to the **sender** hardware.
+
+Now the same code is running but the physical boards are swapped. Test again.
+
+- **If the bus works in this direction** → one specific MCP2515 module has a bad transceiver chip. Swap that module out.
+- **If it still fails in both directions** → the wires or terminals are the issue, not the modules.
+
+## Step 7 — Last resort: probe with the screen
+
+You confirmed the screen and TFT_eSPI work. If you have a third jumper wire and an ESP32 GPIO free, you can use the screen ESP32 to do basic continuity testing. But Step 6 is faster and probably enough.
+
+---
+
+## What to send me afterward
+
+After working through these, regardless of outcome, tell me:
+
+1. Which step (if any) fixed it
+2. The sender's serial output during the test (first 5–10 lines after boot)
+3. The receiver's serial output during the test (first STATUS line plus any RX lines)
+
+If everything works, we move on to integrating the screen with the receiver, then Step 5 (DBC).
+
+If nothing works after all six steps, the next move is to replace one of the MCP2515 modules — they're $5 and notoriously inconsistent.
+
+## Files you'll need
+
+- `CAN_Sender_Debug.ino` — running on the sender
+- `CAN_Receiver_Debug.ino` — running on the receiver
+
+Both already in your sketch folder. Each must be in its own folder named to match the .ino file.
+
+## Sleep well
+
+The data we have is unambiguous — receiver sees literally nothing. That's a wiring problem, not a code problem, and wiring problems always have a physical answer. Tomorrow we find it.
