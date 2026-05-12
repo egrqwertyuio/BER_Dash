@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(start \"c:\\\\Users\\\\Will Mattis\\\\Documents\\\\GitHub\\\\BER_Dash\\\\New_Screen_Code\\\\EV3_VehicleBus_Dash_Receiver.ino\")",
+      "Bash(start \"c:\\\\Users\\\\Will Mattis\\\\Documents\\\\GitHub\\\\BER_Dash\\\\New_Screen_Code\\\\EV3_VehicleBus_Test_Sender.ino\")"
+    ]
+  }
+}

@@ -309,7 +309,7 @@ void setup() {
   // a white screen or inverted colours on first boot.
   tft.init(170, 320, SPI_MODE3);
   tft.setSPISpeed(40000000);
-  tft.setRotation(3);   // 0 = portrait, USB at bottom. Try 2 if it's upside-down.
+  tft.setRotation(0);   // 0 = portrait, USB at bottom. Try 2 if it's upside-down.
   tft.invertDisplay(false);  // flip to true if colours look wrong
 
   // Splash
