@@ -13,9 +13,15 @@
  *   soc <0-100>      - battery SOC percent
  *   mode <0-5>       - drive mode: 0=STBY 1=DRIVE 2=REGEN 3=ENDUR 4=SPORT 5=LIMP
  *   fault <0|1>      - ECU/MC fault active
+ *   inv1fault <0|1>  - inverter 1 MC fault active
+ *   inv2fault <0|1>  - inverter 2 MC fault active
+ *   init <0|1>       - init finished
  *   r2d <0|1>        - ready to drive
  *   pre <0|1>        - precharge complete
  *   regen <0|1>      - regen enabled
+ *   bps <raw>        - brake pressure sensor raw value
+ *   prog1 <0|1>      - program button 1
+ *   prog2 <0|1>      - program button 2
  *   bms_i <amps>     - BMS current
  *   maxcellv <volts> - max cell voltage e.g. 4.08
  *   mincellv <volts> - min cell voltage e.g. 3.72
@@ -61,10 +67,16 @@ struct ManualState {
   uint8_t  battSoc      = 80;
   uint8_t  driveMode    = 1;
   bool     fault        = false;
+  bool     inv1Fault    = false;
+  bool     inv2Fault    = false;
+  bool     initFinished = true;
   bool     r2d          = true;
   bool     precharge    = true;
   bool     regen        = false;
   bool     brake        = false;
+  bool     prog1        = false;
+  bool     prog2        = false;
+  uint16_t bpsRaw       = 300;
   float    bmsCurrent   = 50.0f;
   float    maxCellV     = 4.08f;
   float    minCellV     = 3.72f;
@@ -117,10 +129,16 @@ void printHelp() {
   Serial.println("  soc <0-100>      battery SOC");
   Serial.println("  mode <0-5>       0=STBY 1=DRIVE 2=REGEN 3=ENDUR 4=SPORT 5=LIMP");
   Serial.println("  fault <0|1>      fault active");
+  Serial.println("  inv1fault <0|1>  inverter 1 MC fault active");
+  Serial.println("  inv2fault <0|1>  inverter 2 MC fault active");
+  Serial.println("  init <0|1>       init finished");
   Serial.println("  r2d <0|1>        ready to drive");
   Serial.println("  pre <0|1>        precharge complete");
   Serial.println("  regen <0|1>      regen enabled");
   Serial.println("  brake <0|1>      brake pressed");
+  Serial.println("  bps <raw>        brake pressure sensor raw value");
+  Serial.println("  prog1 <0|1>      program button 1");
+  Serial.println("  prog2 <0|1>      program button 2");
   Serial.println("  bms_i <amps>     BMS current");
   Serial.println("  maxcellv <V>     max cell voltage");
   Serial.println("  mincellv <V>     min cell voltage");
@@ -143,10 +161,16 @@ void printState() {
   Serial.print("kW lv=");      Serial.print(manual.lvAdc * 0.1f, 1);
   Serial.print("V soc=");      Serial.print(manual.battSoc);
   Serial.print("% fault=");    Serial.print(manual.fault);
+  Serial.print(" inv1=");      Serial.print(manual.inv1Fault);
+  Serial.print(" inv2=");      Serial.print(manual.inv2Fault);
+  Serial.print(" init=");      Serial.print(manual.initFinished);
   Serial.print(" r2d=");       Serial.print(manual.r2d);
   Serial.print(" pre=");       Serial.print(manual.precharge);
   Serial.print(" regen=");     Serial.print(manual.regen);
-  Serial.print(" brake=");     Serial.println(manual.brake);
+  Serial.print(" brake=");     Serial.print(manual.brake);
+  Serial.print(" bps=");       Serial.print(manual.bpsRaw);
+  Serial.print(" prog1=");     Serial.print(manual.prog1);
+  Serial.print(" prog2=");     Serial.println(manual.prog2);
   Serial.print("bms_i=");      Serial.print(manual.bmsCurrent, 1);
   Serial.print("A cellV=");    Serial.print(manual.minCellV, 2);
   Serial.print("/");           Serial.print(manual.maxCellV, 2);
@@ -194,11 +218,21 @@ void handleCommand(String line) {
   else if (cmd == "lv")       { manual.lvAdc      = (uint16_t)(clampF(arg1, 0, 99) * 10 + 0.5f); }
   else if (cmd == "soc")      { manual.battSoc    = (uint8_t)clampF(arg1, 0, 100); }
   else if (cmd == "mode")     { manual.driveMode  = (uint8_t)clampF(arg1, 0, 5); }
-  else if (cmd == "fault")    { manual.fault      = (rest.toInt() != 0); }
+  else if (cmd == "fault")    {
+    manual.fault = (rest.toInt() != 0);
+    manual.inv1Fault = manual.fault;
+    manual.inv2Fault = manual.fault;
+  }
+  else if (cmd == "inv1fault") { manual.inv1Fault = (rest.toInt() != 0); }
+  else if (cmd == "inv2fault") { manual.inv2Fault = (rest.toInt() != 0); }
+  else if (cmd == "init")     { manual.initFinished = (rest.toInt() != 0); }
   else if (cmd == "r2d")      { manual.r2d        = (rest.toInt() != 0); }
   else if (cmd == "pre")      { manual.precharge  = (rest.toInt() != 0); }
   else if (cmd == "regen")    { manual.regen      = (rest.toInt() != 0); }
   else if (cmd == "brake")    { manual.brake      = (rest.toInt() != 0); }
+  else if (cmd == "bps")      { manual.bpsRaw     = (uint16_t)clampF(arg1, 0, 65535); }
+  else if (cmd == "prog1")    { manual.prog1      = (rest.toInt() != 0); }
+  else if (cmd == "prog2")    { manual.prog2      = (rest.toInt() != 0); }
   else if (cmd == "bms_i")    { manual.bmsCurrent   = clampF(arg1, 0, 200); }
   else if (cmd == "maxcellv") { manual.maxCellV     = clampF(arg1, 0, 5); }
   else if (cmd == "mincellv") { manual.minCellV     = clampF(arg1, 0, 5); }
@@ -274,6 +308,8 @@ void sendAutoFrames() {
   memset(buf, 0, 8);
   setBit(buf, 2, demoFault);
   setBit(buf, 25, demoFault);
+  setBit(buf, 34, demoFault);
+  setBit(buf, 57, demoFault);
   sendFrame(0x3, buf);
 
   memset(buf, 0, 8);
@@ -329,11 +365,14 @@ void sendManualFrames() {
   memset(buf, 0, 8);
   setBit(buf, 4, manual.fault);
   setBit(buf, 7, manual.fault);
+  setBit(buf, 9, manual.fault);
   sendFrame(0x2, buf);
 
   memset(buf, 0, 8);
-  setBit(buf, 2, manual.fault);
-  setBit(buf, 25, manual.fault);
+  setBit(buf, 2, manual.inv1Fault);
+  setBit(buf, 25, manual.inv1Fault);
+  setBit(buf, 34, manual.inv2Fault);
+  setBit(buf, 57, manual.inv2Fault);
   sendFrame(0x3, buf);
 
   memset(buf, 0, 8);
@@ -344,11 +383,13 @@ void sendManualFrames() {
   sendFrame(0x4, buf);
 
   memset(buf, 0, 8);
-  putU16(buf, 0, manual.battSoc * 4 + 300);
+  putU16(buf, 0, manual.bpsRaw);
   buf[2] = manual.water1C;
   buf[3] = manual.water2C;
   buf[4] = manual.water3C;
   setBit(buf, 40, manual.r2d);
+  setBit(buf, 41, manual.prog1);
+  setBit(buf, 42, manual.prog2);
   setBit(buf, 43, manual.brake);
   sendFrame(0x5, buf);
 
@@ -356,7 +397,7 @@ void sendManualFrames() {
   putU16(buf, 0, manual.powerKw);
   putU16(buf, 2, manual.lvAdc);
   buf[4] = manual.battSoc;
-  setBit(buf, 40, true);
+  setBit(buf, 40, manual.initFinished);
   setBit(buf, 41, manual.precharge);
   setBit(buf, 42, manual.r2d);
   buf[5] |= (manual.driveMode & 0x07) << 3;

@@ -2,7 +2,7 @@
  * ============================================================
  *  BER (Bearcats Electric Racing) - EV3 Vehicle Bus Dash
  *  Target:  ST7789 170x320 TFT (mounted landscape = 320x170)
- *  CAN DBC: EV3_Vehicle_Bus.dbc
+ *  CAN DBC: CAN/EV4_Vehicle_Bus.dbc
  *
  *  Button: GPIO 16 -> GND  (cycles display modes)
  *  Mode 0 - Overview:  two-column, all data, size-1 text
@@ -72,7 +72,8 @@ const char* DRIVE_MODES[] = { "STANDBY", "DRIVE", "REGEN", "ENDURANCE", "SPORT",
 struct VehicleState {
   bool     ecuFault, mcFault;
   uint16_t ecuFaultBits;
-  uint32_t mcFaultBits;
+  bool     mcFaultInv1, mcFaultInv2;
+  uint32_t mcFaultBitsInv1, mcFaultBitsInv2;
   uint16_t apps0, apps1;
   uint8_t  appsPct;
   int16_t  torqueCmd;
@@ -95,7 +96,7 @@ struct VehicleState {
 VehicleState state     = {};
 VehicleState prevState = {};
 bool     firstDraw  = true;
-uint8_t  dispMode   = 0;     // 0=overview, 1=driver, 2=thermal
+uint8_t  dispMode   = 1;     // 0=overview, 1=driver, 2=thermal
 #define  NUM_MODES  3
 
 uint32_t rxCount    = 0;
@@ -116,7 +117,13 @@ void decodeFrame(uint32_t id, const uint8_t *b, uint8_t len) {
   if (len < 8) return;
   switch (id) {
     case 0x2: state.ecuFaultBits = getU16(b,0); state.ecuFault = getBit(b,7)||getBit(b,9)||getBit(b,6); break;
-    case 0x3: state.mcFaultBits  = getBitsLE(b,0,26); state.mcFault = getBit(b,25); break;
+    case 0x3:
+      state.mcFaultBitsInv1 = getBitsLE(b,0,26);
+      state.mcFaultBitsInv2 = getBitsLE(b,32,26);
+      state.mcFaultInv1 = getBit(b,25);
+      state.mcFaultInv2 = getBit(b,57);
+      state.mcFault = state.mcFaultInv1 || state.mcFaultInv2;
+      break;
     case 0x4: state.apps0=getU16(b,0); state.apps1=getU16(b,2); state.appsPct=b[4]; state.torqueCmd=getS16(b,5); break;
     case 0x5:
       state.bpsRaw=getU16(b,0); state.water1C=b[2]; state.water2C=b[3]; state.water3C=b[4];
@@ -298,8 +305,11 @@ void drawDashOverview() {
   if (firstDraw || state.ecuFault!=prevState.ecuFault || state.mcFault!=prevState.mcFault) {
     drawRV(ys[4], (state.ecuFault||state.mcFault)?"ACTIVE":"CLEAR", faultColor());
   }
-  if (firstDraw || state.ecuFaultBits!=prevState.ecuFaultBits || state.mcFaultBits!=prevState.mcFaultBits) {
-    snprintf(buf,sizeof(buf),"ECU%04X MC%08lX",state.ecuFaultBits,(unsigned long)state.mcFaultBits);
+  if (firstDraw || state.ecuFaultBits!=prevState.ecuFaultBits ||
+      state.mcFaultBitsInv1!=prevState.mcFaultBitsInv1 ||
+      state.mcFaultBitsInv2!=prevState.mcFaultBitsInv2) {
+    snprintf(buf,sizeof(buf),"E%03X I1%07lX I2%07lX",state.ecuFaultBits,
+             (unsigned long)state.mcFaultBitsInv1, (unsigned long)state.mcFaultBitsInv2);
     tft.fillRect(LBL_R_X, ys[5], SCREEN_W-LBL_R_X, 10, CLR_BG);
     gText(buf, LBL_R_X, ys[5], 1, faultColor());
   }
@@ -320,17 +330,20 @@ void drawDashOverview() {
 void drawStaticDriver() {
   tft.fillScreen(CLR_BG);
   drawHdrBase();
-  // SOC label in middle strip
-  gText("SOC", 5, HDR_H+8, 1, CLR_GREY);
-  tft.drawFastHLine(0, DATA_Y,    SCREEN_W, CLR_DARKGREY);
-  tft.drawFastHLine(0, DATA_Y+46, SCREEN_W, CLR_DARKGREY);
-  tft.drawFastVLine(160, DATA_Y,  DATA_H, CLR_DARKGREY);
-  gText("SPEED mph", 5,   DATA_Y+2,  1, CLR_GREY);
-  gText("TS VOLT",   165, DATA_Y+2,  1, CLR_GREY);
-  gText("GLV VOLT",  165, DATA_Y+48, 1, CLR_GREY);
+
+  gText("SOC", 6, HDR_H+7, 1, CLR_GREY);
+  tft.drawFastHLine(0, DATA_Y, SCREEN_W, CLR_DARKGREY);
+  tft.drawFastHLine(0, 137, SCREEN_W, CLR_DARKGREY);
+  tft.drawFastVLine(190, DATA_Y, 91, CLR_DARKGREY);
+
+  gText("SPEED", 8, 51, 1, CLR_GREY);
+  gText("mph", 152, 113, 2, CLR_GREY);
+  gText("TS", 198, 54, 1, CLR_GREY);
+  gText("GLV", 198, 94, 1, CLR_GREY);
+  gText("FAULT", 6, 144, 1, CLR_GREY);
 }
 
-void drawDashDriver() {
+void drawDashDriverLegacy() {
   char buf[32];
   drawHdrDynamic();
 
@@ -370,6 +383,55 @@ void drawDashDriver() {
 // ═══════════════════════════════════════════════════════════════
 //  MODE 2 — THERMAL  (large cell/water temps and voltages)
 // ═══════════════════════════════════════════════════════════════
+void drawDashDriver() {
+  char buf[32];
+  drawHdrDynamic();
+
+  float soc = curSoc();
+  if (firstDraw || soc != prevSoc()) {
+    tft.fillRect(32, HDR_H+3, 224, 16, CLR_BG);
+    drawSocBar(32, HDR_H+5, 224, 12, soc);
+    snprintf(buf, sizeof(buf), "%.0f%%", soc);
+    tft.fillRect(262, HDR_H+4, 54, 14, CLR_BG);
+    gRightText(buf, SCREEN_W-5, HDR_H+7, 1, CLR_WHITE);
+  }
+
+  if (firstDraw || state.speedMph != prevState.speedMph) {
+    snprintf(buf, sizeof(buf), "%.0f", state.speedMph);
+    tft.fillRect(8, 64, 174, 48, CLR_BG);
+    gRightText(buf, 182, 64, 6, CLR_WHITE);
+  }
+
+  if (firstDraw || state.tsVoltage != prevState.tsVoltage) {
+    snprintf(buf, sizeof(buf), "%.1fV", state.tsVoltage);
+    tft.fillRect(226, 54, 88, 24, CLR_BG);
+    gRightText(buf, 315, 57, 2, CLR_CYAN);
+  }
+
+  if (firstDraw || state.lvVoltage != prevState.lvVoltage) {
+    snprintf(buf, sizeof(buf), "%.1fV", state.lvVoltage);
+    tft.fillRect(226, 94, 88, 24, CLR_BG);
+    gRightText(buf, 315, 97, 2, CLR_YELLOW);
+  }
+
+  if (firstDraw || state.ecuFault != prevState.ecuFault || state.mcFault != prevState.mcFault) {
+    bool fault = state.ecuFault || state.mcFault;
+    tft.fillRect(50, 141, 74, 20, CLR_BG);
+    if (fault) {
+      tft.fillRect(50, 141, 74, 18, CLR_ACCENT);
+      gCenterText("ACTIVE", 87, 146, 1, CLR_WHITE);
+    } else {
+      tft.drawRect(50, 141, 74, 18, CLR_GREEN);
+      gCenterText("CLEAR", 87, 146, 1, CLR_GREEN);
+    }
+  }
+
+  if (firstDraw || state.brakePressed != prevState.brakePressed) drawBadge(164, 142, "BRK", state.brakePressed, CLR_ORANGE);
+  if (firstDraw || state.r2dActive != prevState.r2dActive) drawBadge(203, 142, "R2D", state.r2dActive, CLR_GREEN);
+  if (firstDraw || state.prechargeComplete != prevState.prechargeComplete) drawBadge(242, 142, "PRE", state.prechargeComplete, CLR_GREEN);
+  if (firstDraw || state.regenEnabled != prevState.regenEnabled) drawBadge(281, 142, "RGN", state.regenEnabled, CLR_ORANGE);
+}
+
 #define TH_STEP   22   // px per thermal row
 #define TH_Y0     (DATA_Y + 4)
 
@@ -438,10 +500,13 @@ void drawDashThermal() {
 
   // Fault
   if (firstDraw || state.ecuFault!=prevState.ecuFault || state.mcFault!=prevState.mcFault ||
-      state.ecuFaultBits!=prevState.ecuFaultBits || state.mcFaultBits!=prevState.mcFaultBits) {
+      state.ecuFaultBits!=prevState.ecuFaultBits ||
+      state.mcFaultBitsInv1!=prevState.mcFaultBitsInv1 ||
+      state.mcFaultBitsInv2!=prevState.mcFaultBitsInv2) {
     uint16_t fc = faultColor();
     if (state.ecuFault || state.mcFault) {
-      snprintf(buf, sizeof(buf), "ECU%04X MC%08lX", state.ecuFaultBits, (unsigned long)state.mcFaultBits);
+      snprintf(buf, sizeof(buf), "I1%07lX I2%07lX",
+               (unsigned long)state.mcFaultBitsInv1, (unsigned long)state.mcFaultBitsInv2);
     } else {
       snprintf(buf, sizeof(buf), "CLEAR");
     }
