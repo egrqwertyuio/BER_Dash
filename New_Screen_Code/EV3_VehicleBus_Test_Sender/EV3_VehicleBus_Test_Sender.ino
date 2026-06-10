@@ -308,18 +308,69 @@ void sendFrame(uint16_t id, uint8_t *buf) {
 
 void sendAutoFrames() {
   uint8_t buf[8] = {0};
-  uint8_t phase = tick % 100;
 
-  bool demoFault  = (tick % 80) >= 65;
-  bool r2d        = (tick % 40) >= 8;
-  bool precharge  = (tick % 50) >= 5;
-  bool regen      = (tick % 60) >= 30;
-  uint8_t driveMode = (tick / 25) % 6;
-  uint8_t appsPct   = phase;
-  int16_t torqueCmd = (int16_t)((int)appsPct * 4 - (regen ? 60 : 0));
-  uint16_t powerKw  = (uint16_t)((appsPct * 80UL) / 100UL);
-  uint16_t lvAdc    = 124;
-  uint8_t battSoc   = 92 - (tick % 50);
+  // t in seconds (tick fires every 250 ms)
+  float t = tick * 0.25f;
+
+  // ── Throttle: sawtooth 0→100% over 20 s, brief lift at top ──
+  float sawPos  = fmodf(t, 20.0f) / 20.0f;           // 0.0–1.0
+  uint8_t appsPct = (sawPos < 0.85f)
+                    ? (uint8_t)(sawPos / 0.85f * 100.0f)
+                    : (uint8_t)((1.0f - sawPos) / 0.15f * 15.0f);
+
+  bool regen    = (appsPct < 8);
+  int16_t torqueCmd = regen ? (int16_t)(-40)
+                             : (int16_t)(appsPct * 3);
+  uint16_t powerKw  = (uint16_t)(appsPct * 80UL / 100UL);
+
+  // ── SOC: drains 100→20% over ~80 s then resets ──────────────
+  uint8_t battSoc = (uint8_t)(100.0f - fmodf(t, 80.0f) / 80.0f * 80.0f);
+
+  // ── LV voltage: 12.0–13.5 V gentle oscillation ───────────────
+  uint16_t lvAdc = (uint16_t)(125.0f + 8.0f * sinf(t * 0.15f)); // x0.1 V
+
+  // ── Drive mode: cycles through all 6 every 15 s ──────────────
+  uint8_t driveMode = (uint8_t)(fmodf(t, 90.0f) / 15.0f);
+
+  // ── State flags ───────────────────────────────────────────────
+  bool precharge = true;
+  bool r2d       = (fmodf(t, 40.0f) >= 3.0f);   // 3-s gap at start of each lap
+  bool initDone  = (fmodf(t, 40.0f) >= 1.5f);
+
+  // ── Brief fault pulse every 30 s for 2 s ─────────────────────
+  bool demoFault = (fmodf(t, 30.0f) < 2.0f);
+
+  // ── BPS / brake: spikes when throttle lifts ──────────────────
+  bool brakeOn  = regen && (appsPct < 4);
+  uint16_t bpsRaw = brakeOn ? 650 : (uint16_t)(180.0f + 40.0f * sinf(t * 0.4f));
+
+  // ── Water temps: rise with load, baseline oscillation ────────
+  uint8_t water1C = (uint8_t)(30.0f + appsPct * 0.18f + 4.0f * sinf(t * 0.07f));
+  uint8_t water2C = water1C + 3;
+  uint8_t water3C = water1C + 6;
+
+  // ── Cell voltages: track SOC ──────────────────────────────────
+  float maxCellV  = 3.60f + (battSoc / 100.0f) * 0.58f;   // 3.60–4.18 V
+  float minCellV  = maxCellV - 0.12f - 0.04f * sinf(t * 0.2f);
+
+  // ── Cell temps: load-dependent ────────────────────────────────
+  float maxCellT  = 25.0f + appsPct * 0.22f + 4.0f * sinf(t * 0.11f);
+  float minCellT  = maxCellT - 7.0f;
+
+  // ── BMS current/limit ─────────────────────────────────────────
+  float bmsCurrent = 8.0f + appsPct * 1.6f;
+  uint8_t powerLim = (maxCellT > 42.0f) ? 60 : 80;
+
+  // ── IMU: simulated lap cornering ─────────────────────────────
+  float accelX = 3.5f * sinf(t * 0.25f);              // lateral ±3.5 m/s²
+  float accelY = (appsPct / 100.0f) * 6.0f            // longitudinal
+                 - (brakeOn ? 4.0f : 0.0f);
+  float accelZ = 9.81f + 0.4f * sinf(t * 0.55f);
+  float gyroX  = 0.08f * sinf(t * 0.9f);
+  float gyroY  = 0.08f * cosf(t * 0.9f);
+  float gyroZ  = 0.35f * sinf(t * 0.25f);             // yaw rate with accelX
+
+  // ── Send frames ───────────────────────────────────────────────
 
   // ID 0x2 ECU_FAULTS
   memset(buf, 0, 8);
@@ -345,14 +396,14 @@ void sendAutoFrames() {
 
   // ID 0x5 Sensors_Info
   memset(buf, 0, 8);
-  putU16(buf, 0, 300 + appsPct * 4);
-  buf[2] = 34 + (tick % 8);
-  buf[3] = 36 + (tick % 7);
-  buf[4] = 38 + (tick % 6);
+  putU16(buf, 0, bpsRaw);
+  buf[2] = water1C;
+  buf[3] = water2C;
+  buf[4] = water3C;
   setBit(buf, 40, r2d);
-  setBit(buf, 41, (tick % 20) < 5);
-  setBit(buf, 42, (tick % 30) < 8);
-  setBit(buf, 43, appsPct < 8);
+  setBit(buf, 41, false);
+  setBit(buf, 42, false);
+  setBit(buf, 43, brakeOn);
   sendFrame(0x5, buf);
 
   // ID 0x6 Internal_States
@@ -360,7 +411,7 @@ void sendAutoFrames() {
   putU16(buf, 0, powerKw);
   putU16(buf, 2, lvAdc);
   buf[4] = battSoc;
-  setBit(buf, 40, true);
+  setBit(buf, 40, initDone);
   setBit(buf, 41, precharge);
   setBit(buf, 42, r2d);
   buf[5] |= (driveMode & 0x07) << 3;
@@ -370,32 +421,30 @@ void sendAutoFrames() {
   // ID 0x7 BMS_Info
   memset(buf, 0, 8);
   buf[0] = encodeBmsSoc((float)battSoc);
-  buf[1] = encodeBmsCurrent(20.0f + appsPct * 1.2f);
-  buf[2] = encodeCellVolt(4.08f);
-  buf[3] = encodeCellTemp(36.0f + (tick % 12));
-  buf[4] = encodeCellVolt(3.72f);
-  buf[5] = encodeCellTemp(30.0f + (tick % 8));
-  buf[6] = 80 - (tick % 25);
+  buf[1] = encodeBmsCurrent(bmsCurrent);
+  buf[2] = encodeCellVolt(maxCellV);
+  buf[3] = encodeCellTemp(maxCellT);
+  buf[4] = encodeCellVolt(minCellV);
+  buf[5] = encodeCellTemp(minCellT);
+  buf[6] = powerLim;
   sendFrame(0x7, buf);
 
   // ID 0x8 IMU_Z  (Accel_Z bytes 0-3, Gyro_Z bytes 4-7)
   memset(buf, 0, 8);
-  float autoAccelZ = 9.81f + 0.1f * sinf(tick * 0.1f);
-  float autoGyroZ  = 0.05f * sinf(tick * 0.07f);
-  putFloat(buf, 0, autoAccelZ);
-  putFloat(buf, 4, autoGyroZ);
+  putFloat(buf, 0, accelZ);
+  putFloat(buf, 4, gyroZ);
   sendFrame(0x8, buf);
 
   // ID 0x9 IMU_Gyro_XY  (Gyro_X bytes 0-3, Gyro_Y bytes 4-7)
   memset(buf, 0, 8);
-  putFloat(buf, 0, 0.03f * sinf(tick * 0.09f));
-  putFloat(buf, 4, 0.03f * cosf(tick * 0.09f));
+  putFloat(buf, 0, gyroX);
+  putFloat(buf, 4, gyroY);
   sendFrame(0x9, buf);
 
   // ID 0xA IMU_Accel_XY  (Accel_X bytes 0-3, Accel_Y bytes 4-7)
   memset(buf, 0, 8);
-  putFloat(buf, 0, 0.1f * sinf(tick * 0.08f));
-  putFloat(buf, 4, 0.1f * cosf(tick * 0.08f));
+  putFloat(buf, 0, accelX);
+  putFloat(buf, 4, accelY);
   sendFrame(0xA, buf);
 
   tick++;
